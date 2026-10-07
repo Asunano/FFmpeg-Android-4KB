@@ -57,3 +57,4 @@
 /.*/
 !/.forgejo/
 !/.github/
+!build-android-*/
