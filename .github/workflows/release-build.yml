@@ -54,6 +54,15 @@ jobs:
           echo "tag=${REF}-${SUFFIX}" >> $GITHUB_OUTPUT
           echo "源码 ref=$REF  版本=$VER  tag=${REF}-${SUFFIX}"
 
+      - name: 切换到指定源码 ref（ffmpeg_ref 非空时——否则构建的永远是本仓库 master）
+        if: inputs.ffmpeg_ref != ''
+        run: |
+          # 官方 tag 可能不在 fork 的引用里，直接 fetch 上游 tag
+          git remote add upstream https://github.com/FFmpeg/FFmpeg.git 2>/dev/null || true
+          git fetch upstream tag ${{ inputs.ffmpeg_ref }} --depth=1
+          git checkout ${{ inputs.ffmpeg_ref }}
+          echo "已切换到 ${{ inputs.ffmpeg_ref }}（RELEASE=$(cat RELEASE)）"
+
       - name: 构建（tier=${{ matrix.tier }}）
         run: |
           bash android/build.sh . out ${{ matrix.tier }}

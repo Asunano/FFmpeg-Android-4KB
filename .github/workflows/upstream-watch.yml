@@ -1,0 +1,51 @@
+name: upstream-watch
+# 定时检查官方 FFmpeg/FFmpeg 最新 release —— fork 收不到上游 release 事件（GitHub 机制），
+# 只能轮询 API。发现新版本 → 触发 release-build 构建并发布（tag=官方版本-r1）。
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # 每天 UTC 3:00（北京 11:00）查一次
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write   # 触发另一个 workflow 需要
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 查询上游最新正式 release 并比对本地标记
+        id: check
+        run: |
+          # 上游最新 stable release（排除 pre-release/draft）
+          UPSTREAM=$(curl -sf "https://api.github.com/repos/FFmpeg/FFmpeg/releases/latest" | jq -r '.tag_name')
+          [ "$UPSTREAM" != "null" ] && [ -n "$UPSTREAM" ] || { echo "API 查询失败"; exit 1; }
+          echo "上游最新 release: $UPSTREAM"
+          # 本仓库已构建过的官方版本（tag 形如 n8.0.3-r1 → 取 r 前面的官方版本）
+          DONE=$(git ls-remote --tags origin | awk -F'refs/tags/' '{print $2}' | grep -v '\^{}' | sed 's/-r[0-9]*$//' | sort -u)
+          if echo "$DONE" | grep -qx "$UPSTREAM"; then
+            echo "已构建过 $UPSTREAM，无新版本"
+            echo "new=false" >> $GITHUB_OUTPUT
+          else
+            echo "发现新版本 $UPSTREAM（已构建列表：$(echo $DONE | tr '\n' ' ')）"
+            echo "new=true" >> $GITHUB_OUTPUT
+            echo "tag=$UPSTREAM" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 触发 release-build（新官方版本）
+        if: steps.check.outputs.new == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'release-build.yml',
+              ref: 'master',
+              inputs: {
+                ffmpeg_ref: '${{ steps.check.outputs.tag }}',
+                tag_suffix: 'r1'
+              }
+            });
+            console.log('已触发 release-build: ' + '${{ steps.check.outputs.tag }}');
