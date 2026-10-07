@@ -38,13 +38,10 @@ jobs:
         id: ver
         run: |
           REF="${{ inputs.ffmpeg_ref || 'master' }}"
-          # 从源码树读版本（RELEASE 文件，如 "7.1.1" 或 "8.0.git"）
-          FF_VER=$(cat RELEASE | tr -d '[:space:]')
-          # master 快照版用 日期做后缀，正式 tag 用 ref
           if [ "$REF" = "master" ]; then
             VER="master-$(date +%Y%m%d)"
           else
-            VER="${REF#n}"
+            VER="${REF#n}"   # n8.0.3 → 8.0.3
           fi
           SUFFIX="${{ inputs.tag_suffix || 'r1' }}"
           echo "ref=$REF" >> $GITHUB_OUTPUT
@@ -52,14 +49,20 @@ jobs:
           echo "tag=${REF}-${SUFFIX}" >> $GITHUB_OUTPUT
           echo "源码 ref=$REF  版本=$VER  tag=${REF}-${SUFFIX}"
 
-      - name: 切换到指定源码 ref（ffmpeg_ref 非空时——否则构建的永远是本仓库 master）
+      - name: 切换到指定源码 ref 并恢复构建层
         if: inputs.ffmpeg_ref != ''
         run: |
-          # 官方 tag 可能不在 fork 的引用里，直接 fetch 上游 tag
+          REF="${{ inputs.ffmpeg_ref }}"
+          ORIG=$(git rev-parse HEAD)          # 本仓库 master（构建层所在）
+          # 官方 tag 通常不在 fork 的引用里，直接摸上游
           git remote add upstream https://github.com/FFmpeg/FFmpeg.git 2>/dev/null || true
-          git fetch upstream tag ${{ inputs.ffmpeg_ref }} --depth=1
-          git checkout ${{ inputs.ffmpeg_ref }}
-          echo "已切换到 ${{ inputs.ffmpeg_ref }}（RELEASE=$(cat RELEASE)）"
+          git fetch --depth=1 upstream "refs/tags/${REF}:refs/tags/${REF}"
+          git checkout "$REF"
+          # 关键：checkout 到上游 tag 后工作树里没有 android/ ，必须把构建层取回，
+          # 否则 `bash android/build.sh` 直接 127（No such file or directory）。
+          git checkout "$ORIG" -- android/ .github/
+          [ -f android/build.sh ] || { echo "FAIL: 构建层 android/build.sh 未恢复"; exit 1; }
+          echo "已切换源码到 $REF（RELEASE=$(cat RELEASE)），构建层取自 $ORIG"
 
       - name: 构建（tier=${{ matrix.tier }}）
         run: |
