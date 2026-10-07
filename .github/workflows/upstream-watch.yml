@@ -22,13 +22,14 @@ jobs:
       - name: 查官方最新正式 tag 并比对已构建
         id: check
         run: |
-          # 取所有 n 开头 tag，过滤出正式版（n<数字>[.<数字>...]，排除 .git 后缀）
+          # 只追 release/8.0 稳定线（API 稳定，桥无需随大版本改动）。
+          # 取该分支上全部 n8.0.x tag，过滤正式版，取版本号最大的一个。
           LATEST=$(curl -sf "https://api.github.com/repos/FFmpeg/FFmpeg/tags?per_page=100" \
             | jq -r '.[].name' \
-            | grep -E '^n[0-9]+(\.[0-9]+)+$' \
+            | grep -E '^n8\.0\.[0-9]+$' \
             | sort -V | tail -1)
           [ -n "$LATEST" ] || { echo "未取到官方 tag"; exit 1; }
-          echo "官方最新正式 tag: $LATEST"
+          echo "追踪线: release/8.0，最新正式 tag: $LATEST"
           DONE=$(git ls-remote --tags origin | awk -F'refs/tags/' '{print $2}' | grep -v '\^{}' | sed -E 's/-r[0-9]+$//' | sort -u)
           if echo "$DONE" | grep -qx "$LATEST"; then
             echo "已构建过 $LATEST"
