@@ -1,0 +1,8 @@
+# JNI 桥配置 —— 使用方唯一必改的一行
+#
+# 填你项目里桥接类的全限定名（包名 + 类名，/ 分隔，不含 .class 后缀）。
+# 必须与 FfmpegBridge.java 模板改完包名后的实际全名一致，否则
+# JNI_OnLoad 的 FindClass 失败、System.loadLibrary 直接抛 UnsatisfiedLinkError。
+#
+# 构建时可传 -DBRIDGE_CLASS='"..."' 覆盖此默认值（见 build.sh）。
+BRIDGE_CLASS=com/example/media/FfmpegBridge

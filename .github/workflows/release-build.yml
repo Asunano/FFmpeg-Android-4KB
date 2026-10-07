@@ -1,0 +1,104 @@
+name: release-build
+# 官方发 release → 自动构建 → 打 tag 发 Release
+# 上游只在正式版（nX.Y(.Z)）发 release，beta/commit 快照不会触发 —— 天然过滤小改动。
+
+on:
+  # 官方 release published（fork 收 webhook 有数小时延迟，正常）
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ffmpeg_ref:
+        description: 'FFmpeg 源码 ref（默认当前 master；填官方 tag 如 n7.1.1 可复现旧版）'
+        required: false
+        default: ''
+      tag_suffix:
+        description: 'tag 后缀（默认 ufi1；同版本重跑递增）'
+        required: false
+        default: 'ufi1'
+
+permissions:
+  contents: write   # 打 tag / 发 Release 需要
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        tier: [common, min]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 钉死 NDK r27b（避免 runner 升级导致产物漂移）
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r27b-linux.zip
+          unzip -q android-ndk-r27b-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27b" >> $GITHUB_ENV
+
+      - name: 确定源码 ref 与版本号
+        id: ver
+        run: |
+          REF="${{ inputs.ffmpeg_ref || github.event.release.tag_name || 'master' }}"
+          # 从源码树读版本（RELEASE 文件，如 "7.1.1" 或 "8.0.git"）
+          FF_VER=$(cat RELEASE | tr -d '[:space:]')
+          # master 快照版用 日期做后缀，正式 tag 用 ref
+          if [ "$REF" = "master" ]; then
+            VER="master-$(date +%Y%m%d)"
+          else
+            VER="${REF#n}"
+          fi
+          SUFFIX="${{ inputs.tag_suffix || 'ufi1' }}"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          echo "version=$VER" >> $GITHUB_OUTPUT
+          echo "tag=${REF}-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "源码 ref=$REF  版本=$VER  tag=${REF}-${SUFFIX}"
+
+      - name: 构建（tier=${{ matrix.tier }}）
+        run: |
+          bash android/build.sh . out ${{ matrix.tier }}
+          ls -la out/
+
+      - name: 三重校验
+        run: |
+          SO=out/libffmpeg_bridge.so
+          NM=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
+          READELF=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf
+          # 1) JNI_OnLoad 导出（RegisterNatives 桥的唯一门面；没有它 = Java 无法加载）
+          $NM -D $SO | grep -q "T JNI_OnLoad" || { echo "FAIL: JNI_OnLoad 未导出"; exit 1; }
+          # 2) 4KB 页对齐（8KB/16KB 页设备向下兼容的关键）
+          if $READELF -lW $SO | awk '/LOAD/ {gsub(/0x/,"",$NF); if (strtonum("0x"$NF) > 4096) bad=1} END {exit bad?1:0}'; then
+            echo "OK: LOAD 段全部 <= 4096"
+          else
+            $READELF -lW $SO | grep LOAD
+            echo "FAIL: 存在 >4096 对齐的 LOAD 段"; exit 1
+          fi
+          # 3) 组件清单存在且非空
+          [ -s out/enabled-components.txt ] || { echo "FAIL: 组件清单为空"; exit 1; }
+          echo "== 校验全部通过 =="
+
+      - name: 重命名产物（带版本/档位/架构）
+        run: |
+          mkdir -p dist
+          cp out/libffmpeg_bridge.so "dist/libffmpeg_bridge-${{ steps.ver.outputs.version }}-${{ matrix.tier }}-arm64.so"
+          cp out/enabled-components.txt "dist/enabled-components-${{ steps.ver.outputs.version }}-${{ matrix.tier }}.txt"
+          sha256sum dist/* > dist/SHA256SUMS
+
+      - name: 上传 artifact（90 天）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-bridge-${{ steps.ver.outputs.version }}-${{ matrix.tier }}
+          path: dist/
+
+      - name: 发 Release（仅 common 档，min 档只进 artifact）
+        if: matrix.tier == 'common' && steps.ver.outputs.tag != 'master-ufi1'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          body: |
+            自动构建自官方 release：[${{ github.event.release.tag_name || 'manual' }}](${{ github.event.release.html_url }})
+            档位 common（全量解码+转码+滤镜）。min 档见 Actions artifact。
+            校验：JNI_OnLoad ✓ / 4KB 对齐 ✓ / 组件清单见附件。
+          files: dist/*
+          fail_on_unmatched_files: true

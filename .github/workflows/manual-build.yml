@@ -1,0 +1,60 @@
+name: manual-build
+# 手动触发：自选档位/架构/ref，出 artifact（不发 Release）
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: '档位'
+        required: true
+        default: 'common'
+        type: choice
+        options: [min, mid, full, common]
+      ffmpeg_ref:
+        description: 'FFmpeg 源码 ref（空=当前 master；可填官方 tag 如 n7.1.1）'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 切到指定 ref（可选）
+        if: inputs.ffmpeg_ref != ''
+        run: |
+          git fetch origin tag ${{ inputs.ffmpeg_ref }} --no-tags || true
+          git checkout ${{ inputs.ffmpeg_ref }} || { echo "ref 不存在"; exit 1; }
+
+      - name: 钉死 NDK r27b
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r27b-linux.zip
+          unzip -q android-ndk-r27b-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r27b" >> $GITHUB_ENV
+
+      - name: 构建（tier=${{ inputs.tier }}）
+        run: bash android/build.sh . out ${{ inputs.tier }}
+
+      - name: 校验（JNI_OnLoad + 4KB 对齐）
+        run: |
+          SO=out/libffmpeg_bridge.so
+          NM=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
+          READELF=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf
+          $NM -D $SO | grep -q "T JNI_OnLoad" || { echo "FAIL: JNI_OnLoad 未导出"; exit 1; }
+          $READELF -lW $SO | awk '/LOAD/ {gsub(/0x/,"",$NF); if (strtonum("0x"$NF) > 4096) bad=1} END {exit bad?1:0}' \
+            || { echo "FAIL: 4KB 对齐不符"; $READELF -lW $SO | grep LOAD; exit 1; }
+          echo "OK"
+
+      - name: 打包
+        run: |
+          mkdir -p dist
+          VER=$(cat RELEASE | tr -d '[:space:]')
+          cp out/libffmpeg_bridge.so "dist/libffmpeg_bridge-${VER}-${{ inputs.tier }}-arm64.so"
+          cp out/enabled-components.txt dist/ 2>/dev/null || true
+          sha256sum dist/* > dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-bridge-manual-${{ inputs.tier }}
+          path: dist/
