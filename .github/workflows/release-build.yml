@@ -13,9 +13,9 @@ on:
         required: false
         default: ''
       tag_suffix:
-        description: 'tag 后缀（默认 ufi1；同版本重跑递增）'
+        description: 'tag 后缀（默认 r1；同版本重跑递增 r2/r3…）'
         required: false
-        default: 'ufi1'
+        default: 'r1'
 
 permissions:
   contents: write   # 打 tag / 发 Release 需要
@@ -48,7 +48,7 @@ jobs:
           else
             VER="${REF#n}"
           fi
-          SUFFIX="${{ inputs.tag_suffix || 'ufi1' }}"
+          SUFFIX="${{ inputs.tag_suffix || 'r1' }}"
           echo "ref=$REF" >> $GITHUB_OUTPUT
           echo "version=$VER" >> $GITHUB_OUTPUT
           echo "tag=${REF}-${SUFFIX}" >> $GITHUB_OUTPUT
@@ -91,7 +91,7 @@ jobs:
           path: dist/
 
       - name: 发 Release（仅 common 档，min 档只进 artifact）
-        if: matrix.tier == 'common' && steps.ver.outputs.tag != 'master-ufi1'
+        if: matrix.tier == 'common' && steps.ver.outputs.tag != 'master-r1'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}

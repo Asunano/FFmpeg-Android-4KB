@@ -17,7 +17,7 @@ Release 附件命名：`libffmpeg_bridge-<官方版本>-<档位>-<架构>.so`，
 libffmpeg_bridge-n7.1.1-common-arm64.so
 ```
 
-版本 tag：`<官方版本>-ufi<N>`（同官方版本二次构建递增 N），如 `n7.1.1-ufi1`。
+版本 tag：`<官方版本>-r<N>`（同官方版本二次构建递增 N），如 `n8.0-r1`。
 
 ## 档位
 
@@ -72,7 +72,7 @@ bash android/build.sh . /tmp/out common
 
 ## CI 自动化
 
-- **`release-build.yml`**：官方发 release → 自动按 common/min 两档 × arm64 构建 → 三重校验（4KB 对齐 / JNI_OnLoad 导出 / 组件清单存档）→ 自动打 tag `<版本>-ufi1` 并发 Release。
+- **`release-build.yml`**：官方发 release → 自动按 common/min 两档 × arm64 构建 → 三重校验（4KB 对齐 / JNI_OnLoad 导出 / 组件清单存档）→ 自动打 tag `<版本>-r1` 并发 Release。
 - **`manual-build.yml`**：手动触发，自选档位/架构/源码 ref。
 
 上游 release 事件的 webhook 对 fork 有数小时延迟，属正常。
