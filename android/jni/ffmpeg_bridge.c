@@ -740,7 +740,15 @@ static jstring jniBridgeVersion(JNIEnv *env, jclass c) {
 }
 
 /* ── RegisterNatives：包名零耦合的关键 ─────────────────────────── */
-static const JNINativeMethod g_methods[] = {
+/*
+ * 关键：RegisterNatives 是「全有或全无」——表里任一条方法在目标类上不存在，
+ * ART 会抛 NoSuchMethodError 使整个 loadLibrary 失败（Android 官方文档明示）。
+ * 因此不能盲目注册全部 11 条：使用方的类可能只声明其中一部分（如只做抽帧
+ * 的项目只需 extractFrame+probeDurationSeconds）。改为逐条探测：
+ *   类上存在该方法 → 注册；不存在 → 跳过（视为未使用的可选能力）。
+ * 至少要注册成功 1 条，否则返回 JNI_ERR（配置错误，bridge_config 与类不匹配）。
+ */
+static const JNINativeMethod g_all_methods[] = {
     { "extractFrame",         "(Ljava/lang/String;Ljava/lang/String;DI)I",                    (void *)jniExtractFrame },
     { "extractThumbnails",    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[DI)I",  (void *)jniExtractThumbnails },
     { "probeVideoInfo",       "(Ljava/lang/String;)Ljava/lang/String;",                        (void *)jniProbeVideoInfo },
@@ -764,8 +772,26 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
         fprintf(stderr, "[ffmpeg_bridge] FindClass(%s) 失败 —— bridge_config.txt 与 Java 类包名未同步\n", BRIDGE_CLASS);
         return JNI_ERR;
     }
-    if ((*env)->RegisterNatives(env, clazz, g_methods, sizeof(g_methods) / sizeof(g_methods[0])) != JNI_OK) {
-        fprintf(stderr, "[ffmpeg_bridge] RegisterNatives 失败\n");
+    const int total = (int)(sizeof(g_all_methods) / sizeof(g_all_methods[0]));
+    JNINativeMethod reg[sizeof(g_all_methods) / sizeof(g_all_methods[0])];
+    int n = 0;
+    for (int i = 0; i < total; i++) {
+        jmethodID mid = (*env)->GetMethodID(env, clazz,
+                                            g_all_methods[i].name,
+                                            g_all_methods[i].signature);
+        if (mid == NULL) {
+            /* 类未声明该方法：清异常并跳过（可选项） */
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            continue;
+        }
+        reg[n++] = g_all_methods[i];
+    }
+    if (n == 0) {
+        fprintf(stderr, "[ffmpeg_bridge] %s 上未找到任何可注册的 native 方法 —— 请核对 bridge_config.txt 与类定义\n", BRIDGE_CLASS);
+        return JNI_ERR;
+    }
+    if ((*env)->RegisterNatives(env, clazz, reg, n) != JNI_OK) {
+        fprintf(stderr, "[ffmpeg_bridge] RegisterNatives 失败（已探测 %d/%d 条）\n", n, total);
         return JNI_ERR;
     }
     av_log_set_level(AV_LOG_ERROR);
